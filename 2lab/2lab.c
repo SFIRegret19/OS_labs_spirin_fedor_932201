@@ -11,109 +11,109 @@
 #include <sys/select.h>
 
 #define PORT 12345
-#define BACKLOG 5
+#define MAX_QUEUE 5
 #define BUFFER_SIZE 1024
 
-volatile sig_atomic_t wasSigHup = 0;
+volatile sig_atomic_t sigHupReceived = 0;
 
-void sigHupHandler(int signo) {
-    wasSigHup = 1;
+void handleSIGHUP(int signo) {
+    sigHupReceived = 1;
 }
 
 int main() {
-    int server_fd, client_fd, max_fd, opt = 1;
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t client_len = sizeof(client_addr);
-    fd_set active_fds, fds;
+    int serverSocket, clientSocket, maxDescriptor, optVal = 1;
+    struct sockaddr_in serverAddress, clientAddress;
+    socklen_t clientAddressLen = sizeof(clientAddress);
+    fd_set activeDescriptors, workingDescriptors;
     sigset_t blockedMask, origMask;
     char buffer[BUFFER_SIZE];
 
-    struct sigaction sa;
+    struct sigaction signalAction;
     sigemptyset(&blockedMask);
     sigaddset(&blockedMask, SIGHUP);
     sigprocmask(SIG_BLOCK, &blockedMask, &origMask);
 
-    sa.sa_handler = sigHupHandler;
-    sa.sa_flags = SA_RESTART;
-    sigaction(SIGHUP, &sa, NULL);
+    signalAction.sa_handler = handleSIGHUP;
+    signalAction.sa_flags = SA_RESTART;
+    sigaction(SIGHUP, &signalAction, NULL);
 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-        perror("socket");
+    if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        perror("Error creating socket");
         exit(EXIT_FAILURE);
     }
 
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &optVal, sizeof(optVal));
 
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(PORT);
+    memset(&serverAddress, 0, sizeof(serverAddress));
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_addr.s_addr = INADDR_ANY;
+    serverAddress.sin_port = htons(PORT);
 
-    if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
-        perror("bind");
-        close(server_fd);
+    if (bind(serverSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) == -1) {
+        perror("Error binding socket");
+        close(serverSocket);
         exit(EXIT_FAILURE);
     }
 
-    if (listen(server_fd, BACKLOG) == -1) {
-        perror("listen");
-        close(server_fd);
+    if (listen(serverSocket, MAX_QUEUE) == -1) {
+        perror("Error listening on socket");
+        close(serverSocket);
         exit(EXIT_FAILURE);
     }
 
     printf("Server listening on port %d\n", PORT);
 
-    FD_ZERO(&active_fds);
-    FD_SET(server_fd, &active_fds);
-    max_fd = server_fd;
+    FD_ZERO(&activeDescriptors);
+    FD_SET(serverSocket, &activeDescriptors);
+    maxDescriptor = serverSocket;
 
     while (1) {
-        fds = active_fds;
+        workingDescriptors = activeDescriptors;
 
-        if (pselect(max_fd + 1, &fds, NULL, NULL, NULL, &origMask) == -1) {
+        if (pselect(maxDescriptor + 1, &workingDescriptors, NULL, NULL, NULL, &origMask) == -1) {
             if (errno == EINTR) {
-                if (wasSigHup) {
+                if (sigHupReceived) {
                     printf("Received SIGHUP signal\n");
-                    wasSigHup = 0;
+                    sigHupReceived = 0;
                 }
                 continue;
             } else {
-                perror("pselect");
+                perror("Error during pselect");
                 break;
             }
         }
 
-        if (FD_ISSET(server_fd, &fds)) {
-            client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
-            if (client_fd == -1) {
-                perror("accept");
+        if (FD_ISSET(serverSocket, &workingDescriptors)) {
+            clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddress, &clientAddressLen);
+            if (clientSocket == -1) {
+                perror("Error accepting connection");
                 continue;
             }
             printf("New connection from %s:%d\n",
-                inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+                inet_ntoa(clientAddress.sin_addr), ntohs(clientAddress.sin_port));
 
-            FD_SET(client_fd, &active_fds);
-            if (client_fd > max_fd) {
-                max_fd = client_fd;
+            FD_SET(clientSocket, &activeDescriptors);
+            if (clientSocket > maxDescriptor) {
+                maxDescriptor = clientSocket;
             }
         }
 
-        for (int fd = 0; fd <= max_fd; fd++) {
-            if (fd != server_fd && FD_ISSET(fd, &fds)) {
+        for (int fd = 0; fd <= maxDescriptor; fd++) {
+            if (fd != serverSocket && FD_ISSET(fd, &fds)) {
                 ssize_t bytes_read = read(fd, buffer, BUFFER_SIZE);
                 if (bytes_read > 0) {
                     printf("Received %zd bytes: %.*s\n", bytes_read, (int)bytes_read, buffer);
                 } else if (bytes_read == 0) {
                     printf("Client disconnected: fd %d\n", fd);
                     close(fd);
-                    FD_CLR(fd, &active_fds);
+                    FD_CLR(fd, &activeDescriptors);
                 } else {
-                    perror("read");
+                    perror(""Error reading from client"");
                 }
             }
         }
     }
 
-    close(server_fd);
+    close(serverSocket);
     return 0;
 }
