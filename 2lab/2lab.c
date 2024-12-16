@@ -65,12 +65,18 @@ int main() {
 
     FD_ZERO(&activeDescriptors);
     FD_SET(serverSocket, &activeDescriptors);
-    maxDescriptor = serverSocket;
 
     while (1) {
-        workingDescriptors = activeDescriptors;
+         fd_set workingDescriptors;
 
-        if (pselect(maxDescriptor + 1, &workingDescriptors, NULL, NULL, NULL, &origMask) == -1) {
+        FD_ZERO(&workingDescriptors);
+        for (int fd = 0; fd < FD_SETSIZE; fd++) {
+            if (FD_ISSET(fd, &activeDescriptors)) {
+                FD_SET(fd, &workingDescriptors);
+            }
+        }
+        
+        if (pselect(FD_SETSIZE, &workingDescriptors, NULL, NULL, NULL, &origMask) == -1) {
             if (errno == EINTR) {
                 if (sigHupReceived) {
                     printf("Received SIGHUP signal\n");
@@ -83,32 +89,29 @@ int main() {
             }
         }
 
-        if (FD_ISSET(serverSocket, &workingDescriptors)) {
-            clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddress, &clientAddressLen);
-            if (clientSocket == -1) {
-                perror("Error accepting connection");
-                continue;
-            }
-            printf("New connection from %s:%d\n",
-                inet_ntoa(clientAddress.sin_addr), ntohs(clientAddress.sin_port));
-
-            FD_SET(clientSocket, &activeDescriptors);
-            if (clientSocket > maxDescriptor) {
-                maxDescriptor = clientSocket;
-            }
-        }
-
-        for (int fd = 0; fd <= maxDescriptor; fd++) {
-            if (fd != serverSocket && FD_ISSET(fd, &fds)) {
-                ssize_t bytes_read = read(fd, buffer, BUFFER_SIZE);
-                if (bytes_read > 0) {
-                    printf("Received %zd bytes: %.*s\n", bytes_read, (int)bytes_read, buffer);
-                } else if (bytes_read == 0) {
-                    printf("Client disconnected: fd %d\n", fd);
-                    close(fd);
-                    FD_CLR(fd, &activeDescriptors);
+        for (int fd = 0; fd < FD_SETSIZE; fd++) {
+            if (FD_ISSET(fd, &workingDescriptors)) {
+                if (fd == serverSocket) {
+                    clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddress, &clientAddressLen);
+                    if (clientSocket == -1) {
+                        perror("Error accepting connection");
+                        continue;
+                    }
+                    printf("New connection from %s:%d\n",
+                        inet_ntoa(clientAddress.sin_addr), ntohs(clientAddress.sin_port));
+                
+                    FD_SET(clientSocket, &activeDescriptors);
                 } else {
-                    perror(""Error reading from client"");
+                    ssize_t bytesRead = read(fd, messageBuffer, MSG_BUFFER_SIZE);
+                    if (bytesRead > 0) {
+                        printf("Received %zd bytes: %.*s\n", bytesRead, (int)bytesRead, messageBuffer);
+                    } else if (bytesRead == 0) {
+                        printf("Client disconnected: fd %d\n", fd);
+                        close(fd);
+                        FD_CLR(fd, &activeDescriptors);
+                    } else {
+                        perror("Error reading from client");
+                    }
                 }
             }
         }
